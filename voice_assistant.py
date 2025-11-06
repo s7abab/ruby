@@ -29,8 +29,8 @@ USAGE:
 - The assistant will start listening for your voice commands
 - Say "exit", "quit", "stop", "exit assistant", or "close assistant" to end the session
 - For system commands, use phrases like:
-  * "Open [app name]" - Opens applications (e.g., "Open Chrome", "Open Notepad")
-  * "Close [app name]" - Closes applications (e.g., "Close Chrome", "Close Settings")
+  * "Open [app name]" - Opens applications (e.g., "Open Chrome", "Open Notepad", "Open Cursor")
+  * "Close [app name]" - Closes applications (e.g., "Close Chrome", "Close Settings", "Close Cursor")
   * "Open [folder name]" - Opens folders (e.g., "Open Downloads", "Open Documents folder")
   * "Delete file [path]" - Deletes files with confirmation
 - For general questions, just ask naturally - the assistant will use Ollama to respond
@@ -41,7 +41,8 @@ EXAMPLE VOICE COMMANDS:
 - "Open Notepad"
 - "Open Calculator" or "Open Calc"
 - "Open Settings"
-- "Close Settings" or "Close Chrome"
+- "Open Cursor" or "Open Cursor IDE"
+- "Close Settings" or "Close Chrome" or "Close Cursor"
 - "Open File Explorer"
 - "Open Downloads"
 - "Open Documents folder"
@@ -69,6 +70,7 @@ import sys
 import time
 import subprocess
 import shutil
+import re
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -259,6 +261,7 @@ class VoiceAssistant:
                 app_names = [
                     'chrome', 'google chrome', 'firefox', 'edge', 'microsoft edge', 'browser',
                     'notepad', 'notepad++', 'code', 'visual studio code', 'vs code',
+                    'cursor', 'cursor ide', 'cursor editor',
                     'calculator', 'calc', 'paint', 'mspaint', 'word', 'excel', 'powerpoint',
                     'spotify', 'discord', 'steam', 'vlc', 'media player',
                     'settings', 'control panel', 'task manager', 'cmd', 'command prompt',
@@ -282,25 +285,51 @@ class VoiceAssistant:
             parts = text.split('open', 1)
             if len(parts) > 1:
                 target = parts[1].strip()
-                # Remove common words
-                target = target.replace('folder', '').replace('the', '').replace('app', '').replace('application', '').strip()
+                # Remove common words and normalize whitespace
+                # Remove words in order: folder, the, app, application
+                target = target.replace('folder', '').replace('the', '').replace('application', '').replace('app', '').strip()
+                # Normalize multiple spaces to single space
+                target = re.sub(r'\s+', ' ', target).strip()
+                
+                # Debug: Print what we're matching
+                print(f"DEBUG parse_command: text='{text}', target='{target}', repr={repr(target)}")
                 
                 # Check if it's a known app name
                 app_names = [
                     'chrome', 'google chrome', 'firefox', 'edge', 'microsoft edge', 'browser',
                     'notepad', 'notepad++', 'code', 'visual studio code', 'vs code',
+                    'cursor', 'cursor ide', 'cursor editor',
                     'calculator', 'calc', 'paint', 'mspaint', 'word', 'excel', 'powerpoint',
                     'spotify', 'discord', 'steam', 'vlc', 'media player',
                     'settings', 'control panel', 'task manager', 'cmd', 'command prompt',
                     'powershell', 'explorer', 'file explorer', 'windows explorer'
                 ]
                 
-                # Check if target matches any app name (or contains it)
+                # Check if target matches any app name
+                # First check for exact match (highest priority)
+                target_lower = target.lower().strip()
+                print(f"DEBUG: Checking target_lower='{target_lower}' against app_names")
+                
+                if target_lower in app_names:
+                    print(f"DEBUG: ✓ Matched exact app: {target_lower}")
+                    return ('open_app', target_lower)
+                
+                # Then check if any app name is contained in target (for phrases like "open google chrome")
+                # Sort by length (longer matches first) to prioritize more specific matches
+                sorted_apps = sorted([app for app in app_names if app in target_lower], key=len, reverse=True)
+                if sorted_apps:
+                    print(f"DEBUG: ✓ Matched app in target: {sorted_apps[0]}")
+                    return ('open_app', sorted_apps[0])
+                
+                # Finally check if target is contained in any app name (for partial matches)
+                # But only if we haven't matched yet
                 for app in app_names:
-                    if app in target or target in app:
-                        return ('open_app', app if app in target else target)
+                    if target_lower in app:
+                        print(f"DEBUG: ✓ Matched target in app: {app}")
+                        return ('open_app', app)
                 
                 # If not an app, treat as folder
+                print(f"DEBUG: ✗ No app match found for '{target_lower}', treating as folder")
                 return ('open_folder', target)
         
         # Delete file commands
@@ -389,6 +418,9 @@ class VoiceAssistant:
                 'code': 'code',
                 'visual studio code': 'code',
                 'vs code': 'code',
+                'cursor': 'cursor',
+                'cursor ide': 'cursor',
+                'cursor editor': 'cursor',
                 
                 # System Tools
                 'calculator': 'calc',
@@ -436,9 +468,16 @@ class VoiceAssistant:
                 subprocess.Popen(['taskmgr'])
                 return "Opened Task Manager."
             elif command in ['cmd', 'powershell']:
-                # Command line tools
+                # Command line tools (direct executables)
                 subprocess.Popen([command])
                 return f"Opened {command}."
+            elif command == 'cursor':
+                # Cursor is a .cmd file, need shell=True to execute properly
+                try:
+                    subprocess.Popen(['cursor'], shell=True)
+                    return f"Opened {app_name}."
+                except Exception as e:
+                    return f"Error opening Cursor: {str(e)}"
             else:
                 # Try to find the executable in common locations
                 # First, try if it's in PATH
@@ -460,6 +499,9 @@ class VoiceAssistant:
                     "C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE",
                     "C:\\Program Files\\Microsoft Office\\root\\Office16\\POWERPNT.EXE",
                     f"{os.environ.get('LOCALAPPDATA', '')}\\Programs\\Microsoft VS Code\\Code.exe",
+                    f"{os.environ.get('LOCALAPPDATA', '')}\\Programs\\cursor\\Cursor.exe",
+                    f"{os.environ.get('PROGRAMFILES', '')}\\Cursor\\Cursor.exe",
+                    f"{os.environ.get('PROGRAMFILES(X86)', '')}\\Cursor\\Cursor.exe",
                 ]
                 
                 # Try to find the app in common paths
@@ -511,6 +553,9 @@ class VoiceAssistant:
                 'code': 'Code.exe',
                 'visual studio code': 'Code.exe',
                 'vs code': 'Code.exe',
+                'cursor': 'Cursor.exe',
+                'cursor ide': 'Cursor.exe',
+                'cursor editor': 'Cursor.exe',
                 'calculator': 'Calculator.exe',
                 'calc': 'Calculator.exe',
                 'paint': 'mspaint.exe',
@@ -621,7 +666,9 @@ class VoiceAssistant:
         if not text:
             return
         
+        print(f"DEBUG: Processing command: '{text}'")
         command_type, command_data = self.parse_command(text)
+        print(f"DEBUG: Command type: {command_type}, Data: {command_data}")
         
         if command_type == 'exit':
             self.speak("Goodbye! Have a great day.")
